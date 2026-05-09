@@ -444,11 +444,28 @@
       invulnerable: 0
     };
 
+    const storage = {
+      get(key) {
+        try {
+          return localStorage.getItem(key);
+        } catch {
+          return null;
+        }
+      },
+      set(key, value) {
+        try {
+          localStorage.setItem(key, value);
+        } catch {
+          // The game should still run if browser storage is blocked.
+        }
+      }
+    };
+
     const game = {
       score: 0,
       wave: 1,
       kills: 0,
-      best: Number(localStorage.getItem("neonStrikeBest") || 0)
+      best: Number(storage.get("neonStrikeBest") || 0)
     };
 
     function resize() {
@@ -521,6 +538,10 @@
       enemies.length = 0;
       particles.length = 0;
       pickups.length = 0;
+      pointer.active = false;
+      pointer.down = false;
+      keys.clear();
+      clearTouchMove();
       updateHud();
     }
 
@@ -554,7 +575,7 @@
     function gameOver() {
       state = "over";
       game.best = Math.max(game.best, game.score);
-      localStorage.setItem("neonStrikeBest", String(game.best));
+      storage.set("neonStrikeBest", String(game.best));
       setOverlay("Core Down", `Score ${game.score} · Best ${game.best}`, "Restart");
     }
 
@@ -568,9 +589,7 @@
     function shoot() {
       if (player.cooldown > 0 || state !== "playing") return;
 
-      const aimX = pointer.active ? pointer.x : player.x + Math.cos(player.angle) * 90;
-      const aimY = pointer.active ? pointer.y : player.y + Math.sin(player.angle) * 90;
-      const angle = Math.atan2(aimY - player.y, aimX - player.x);
+      const angle = getAimAngle();
       const muzzle = player.radius + 13;
 
       bullets.push({
@@ -587,6 +606,37 @@
       player.cooldown = player.fireRate;
       shake = Math.min(6, shake + 1.2);
       spark(player.x + Math.cos(angle) * muzzle, player.y + Math.sin(angle) * muzzle, angle, 5, "#43e7ff");
+    }
+
+    function getAimAngle() {
+      if (pointer.active) {
+        const dx = pointer.x - player.x;
+        const dy = pointer.y - player.y;
+        if (Math.hypot(dx, dy) > 8) return Math.atan2(dy, dx);
+      }
+
+      const movement = getMovement();
+      if (movement.x || movement.y) return Math.atan2(movement.y, movement.x);
+
+      const target = getNearestEnemy();
+      if (target) return Math.atan2(target.y - player.y, target.x - player.x);
+
+      return player.angle;
+    }
+
+    function getNearestEnemy() {
+      let nearest = null;
+      let nearestDistance = Infinity;
+
+      for (const enemy of enemies) {
+        const dist = Math.hypot(enemy.x - player.x, enemy.y - player.y);
+        if (dist < nearestDistance) {
+          nearest = enemy;
+          nearestDistance = dist;
+        }
+      }
+
+      return nearest;
     }
 
     function spawnEnemy() {
@@ -685,9 +735,12 @@
       player.y = clamp(player.y, player.radius, height - player.radius);
 
       if (pointer.active) {
-        player.angle = Math.atan2(pointer.y - player.y, pointer.x - player.x);
+        player.angle = getAimAngle();
       } else if (movement.x || movement.y) {
         player.angle = Math.atan2(movement.y, movement.x);
+      } else {
+        const target = getNearestEnemy();
+        if (target) player.angle = Math.atan2(target.y - player.y, target.x - player.x);
       }
 
       if (pointer.down || keys.has(" ")) shoot();
@@ -728,6 +781,13 @@
         x: (right ? 1 : 0) - (left ? 1 : 0),
         y: (down ? 1 : 0) - (up ? 1 : 0)
       };
+    }
+
+    function clearTouchMove() {
+      touchMove.up = false;
+      touchMove.down = false;
+      touchMove.left = false;
+      touchMove.right = false;
     }
 
     function updateBullets(dt) {
@@ -1034,6 +1094,12 @@
       keys.delete(event.key.toLowerCase());
     });
 
+    window.addEventListener("blur", () => {
+      keys.clear();
+      clearTouchMove();
+      pointer.down = false;
+    });
+
     canvas.addEventListener("pointermove", setPointerFromEvent);
     canvas.addEventListener("pointerdown", (event) => {
       setPointerFromEvent(event);
@@ -1055,7 +1121,7 @@
       const direction = button.dataset.dir;
       const setDirection = (value) => {
         touchMove[direction] = value;
-        pointer.active = true;
+        pointer.active = false;
       };
 
       button.addEventListener("pointerdown", (event) => {
@@ -1071,7 +1137,7 @@
     fireButton.addEventListener("pointerdown", (event) => {
       event.preventDefault();
       pointer.down = true;
-      pointer.active = true;
+      pointer.active = false;
       shoot();
     });
     fireButton.addEventListener("pointerup", () => {
